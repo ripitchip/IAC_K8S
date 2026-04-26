@@ -1,0 +1,33 @@
+---
+- name: 1. Initialize Control Plane (Master 01)
+  hosts: masters
+  become: true
+  tasks:
+    - name: Bootstrap Kubernetes Cluster
+      ansible.builtin.import_tasks: tasks/master_init.yml
+
+- name: 2. Join Nodes
+  hosts: workers, k8s-master-02, k8s-master-03
+  become: true
+  tasks:
+    - name: Join cluster and set roles
+      ansible.builtin.import_tasks: tasks/nodes_join.yml
+
+- name: 3. Final CNI Sync & Restart (Ensure everything is green)
+  hosts: k8s
+  become: true
+  tasks:
+    - name: Force Sync CNI and Restart Kubelet
+      ansible.builtin.shell: |
+        cp -r /opt/cni/bin/* /usr/lib/cni/
+        systemctl restart kubelet
+      changed_when: true
+
+- name: 4. Deploy ArgoCD, Traefik & Vault
+  hosts: k8s-master-01
+  become: true
+  tasks:
+    - name: Cluster Bootstrap
+      ansible.builtin.import_tasks: tasks/cluster_bootstrap.yml
+    - name: Vault Security Integration (RBAC & Auth Config)
+      ansible.builtin.import_tasks: tasks/vault_integration.yml

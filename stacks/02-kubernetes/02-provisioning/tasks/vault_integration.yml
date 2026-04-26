@@ -1,0 +1,80 @@
+---
+- name: Ensure vault namespace exists
+  ansible.builtin.command: kubectl create namespace vault
+  register: create_ns
+  failed_when: false
+  changed_when: "'created' in create_ns.stdout"
+
+- name: Setup Vault Reviewer RBAC
+  ansible.builtin.shell:
+    cmd: |
+      kubectl apply -f - <<EOF
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: vault-reviewer
+        namespace: vault
+      ---
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: role-tokenreview-binding
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: system:auth-delegator
+      subjects:
+        - kind: ServiceAccount
+          name: vault-reviewer
+          namespace: vault
+      EOF
+  changed_when: true
+
+- name: Wait for Vault Pod to be running
+  ansible.builtin.shell: kubectl get pod vault-0 -n vault -o jsonpath='{.status.phase}'
+  register: vault_phase
+  until: vault_phase.stdout == "Running"
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Check Vault Unseal status
+  ansible.builtin.shell: kubectl exec vault-0 -n vault -- vault status -format=json || true
+  register: vault_status_raw
+  changed_when: false
+
+- name: Fail if Vault is Sealed or Not Initialized
+  ansible.builtin.fail:
+    msg: |
+      Vault is not ready!
+      1. Run 'kubectl exec -it vault-0 -n vault -- vault operator init'
+      2. Run 'kubectl exec -it vault-0 -n vault -- vault operator unseal' (3 times)
+  when: >
+    vault_status_raw.stdout == "" or 
+    (vault_status_raw.stdout | from_json).initialized == false or 
+    (vault_status_raw.stdout | from_json).sealed == true
+
+- name: Configure Vault Kubernetes Auth (Inside Pod)
+  ansible.builtin.shell: |
+    kubectl exec vault-0 -n vault -- /bin/sh -c "
+      export VAULT_TOKEN={{ vault_root_token }};
+      vault auth enable kubernetes;
+      vault write auth/kubernetes/config \
+        kubernetes_host='https://kubernetes.default.svc:443'
+    "
+  register: vault_cfg
+  failed_when: false 
+  changed_when: "'already enabled' not in vault_cfg.stderr"
+
+- name: Create Vault Policy and Role for Home Application
+  ansible.builtin.shell: |
+    kubectl exec vault-0 -n vault -- /bin/sh -c "
+      export VAULT_TOKEN={{ vault_root_token }};
+      echo 'path \"secret/data/home-config\" { capabilities = [\"read\"] }' | vault policy write policy-home -;
+      vault write auth/kubernetes/role/role-home \
+          bound_service_account_names='sa-home-app' \
+          bound_service_account_namespaces='home' \
+          policies='policy-home' \
+          ttl='24h'
+    "
+  changed_when: true

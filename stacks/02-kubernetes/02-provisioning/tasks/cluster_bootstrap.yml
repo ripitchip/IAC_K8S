@@ -1,0 +1,175 @@
+---
+- name: Fresh Infrastructure Deployment (Master-01 only)
+  when: inventory_hostname == "k8s-master-01"
+  block:
+    - name: Add Official Helm Repositories
+      ansible.builtin.shell: |
+        helm repo add flannel https://flannel-io.github.io/flannel/
+        helm repo add nfs-subdir-external-provisioner https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner/
+        helm repo add argo https://argoproj.github.io/argo-helm
+        helm repo add hashicorp https://helm.releases.hashicorp.com
+        helm repo update
+      changed_when: false
+
+    - name: Install Flannel CNI
+      ansible.builtin.shell: |
+        kubectl create ns kube-flannel || true
+        kubectl label --overwrite ns kube-flannel pod-security.kubernetes.io/enforce=privileged || true
+        helm install flannel flannel/flannel --namespace kube-flannel --set podCidr="10.244.0.0/16"
+
+    - name: Install NFS Provisioner
+      ansible.builtin.command: >-
+        helm install nfs-provisioner nfs-subdir-external-provisioner/nfs-subdir-external-provisioner
+        --namespace kube-system
+        --set nfs.server=10.0.60.10
+        --set nfs.path=/mnt/data/k8s-cluster/pvc-volumes
+        --set storageClass.name=truenas-nfs
+        --set storageClass.defaultClass=true
+
+    - name: Apply MetalLB & Traefik
+      ansible.builtin.shell: |
+        kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.4/config/manifests/metallb-native.yaml
+        kubectl wait --namespace metallb-system --for=condition=ready pod --selector=component=controller --timeout=90s
+      changed_when: false
+
+    - name: Configure MetalLB Pool
+      ansible.builtin.shell:
+        cmd: |
+          kubectl apply -f - <<EOF
+          apiVersion: metallb.io/v1beta1
+          kind: IPAddressPool
+          metadata:
+            name: main-pool
+            namespace: metallb-system
+          spec:
+            addresses:
+            - 10.0.50.200-10.0.50.210
+          ---
+          apiVersion: metallb.io/v1beta1
+          kind: L2Advertisement
+          metadata:
+            name: l2-adv
+            namespace: metallb-system
+          EOF
+
+    - name: Install Traefik
+      ansible.builtin.command: >-
+        helm install traefik oci://ghcr.io/traefik/helm/traefik
+        --namespace traefik --create-namespace
+        --set service.type=LoadBalancer
+
+    # --- VAULT PERSISTENCE SETUP ---
+
+    - name: Create Vault Namespace (Manual)
+      ansible.builtin.shell: kubectl create ns vault || true
+      changed_when: false
+
+    - name: Create Static Storage for Vault (Shell Version)
+      ansible.builtin.shell:
+        cmd: |
+          kubectl apply -f - <<EOF
+          apiVersion: v1
+          kind: PersistentVolume
+          metadata:
+            name: vault-pv-static
+          spec:
+            capacity:
+              storage: 10Gi
+            accessModes:
+              - ReadWriteOnce
+            persistentVolumeReclaimPolicy: Retain
+            storageClassName: truenas-nfs
+            nfs:
+              server: 10.0.60.10
+              path: /mnt/data/k8s-cluster/pvc-volumes/vault-static
+          ---
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: data-vault-0
+            namespace: vault
+          spec:
+            storageClassName: truenas-nfs
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: 10Gi
+            volumeName: vault-pv-static
+          EOF
+
+    - name: Install Vault (Persistent Raft - 1 Replica)
+      ansible.builtin.command: >-
+        helm install vault hashicorp/vault
+        --namespace vault
+        --version 0.32.0
+        --set "server.ha.enabled=true"
+        --set "server.ha.raft.enabled=true"
+        --set "server.ha.raft.setNodeId=true"
+        --set "server.replicas=1"
+        --set "server.dataStorage.enabled=true"
+        --set "server.dataStorage.storageClass=truenas-nfs"
+        --set "ui.enabled=true"
+        --set "ui.serviceType=LoadBalancer"
+
+    - name: Install ArgoCD
+      ansible.builtin.command: >-
+        helm install argocd argo/argo-cd
+        --namespace argocd --create-namespace
+        --set server.service.type=ClusterIP
+
+    # --- AUTO-UNSEAL VAULT ---
+
+    - name: Wait for Vault Pod to be Running
+      ansible.builtin.shell: |
+        kubectl get pod vault-0 -n vault -o jsonpath='{.status.phase}'
+      register: pod_phase
+      until: pod_phase.stdout == "Running"
+      retries: 20
+      delay: 5
+      changed_when: false
+
+    - name: Check Vault Seal Status
+      ansible.builtin.shell: kubectl exec vault-0 -n vault -- vault status -format=json
+      register: vault_status
+      failed_when: false
+      changed_when: false
+
+    - name: Unseal Vault (Using Loop)
+      ansible.builtin.shell: |
+        kubectl exec vault-0 -n vault -- vault operator unseal {{ item }}
+      loop: "{{ vault_unseal_keys }}"
+      when: 
+        - vault_status.stdout is defined
+        - vault_status.stdout != ""
+        - (vault_status.stdout | from_json).initialized == true
+        - (vault_status.stdout | from_json).sealed == true
+      no_log: true
+
+    # --- POST-UNSEAL CONFIGURATION ---
+
+    - name: Wait for Vault to be Unsealed (API Ready)
+      ansible.builtin.shell: kubectl exec vault-0 -n vault -- vault status -format=json
+      register: unseal_check
+      until: (unseal_check.stdout | from_json).sealed == false
+      retries: 10
+      delay: 2
+      changed_when: false
+
+    - name: Configure Vault Kubernetes Auth & Policies
+      ansible.builtin.shell: |
+        kubectl exec vault-0 -n vault -- /bin/sh -c "
+          export VAULT_TOKEN={{ vault_root_token }};
+          vault auth enable kubernetes || true;
+          vault write auth/kubernetes/config \
+              kubernetes_host='https://kubernetes.default.svc:443';
+          
+          echo 'path \"secret/data/home-config\" { capabilities = [\"read\"] }' | vault policy write policy-home -;
+          
+          vault write auth/kubernetes/role/role-home \
+              bound_service_account_names='sa-home-app' \
+              bound_service_account_namespaces='home' \
+              policies='policy-home' \
+              ttl='24h'
+        "
+      changed_when: true
