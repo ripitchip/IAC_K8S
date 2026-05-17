@@ -1,0 +1,130 @@
+- name: Ensure Vault namespace exists
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Namespace
+    name: vault
+    state: present
+
+- name: Force release of Vault PV if it was already used
+  ansible.builtin.shell: |
+    STATUS=$(kubectl get pv vault-pv-static -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+    if [ "$STATUS" = "Released" ]; then
+      kubectl patch pv vault-pv-static -p '{"spec":{"claimRef":null}}'
+    fi
+  changed_when: false
+
+- name: Create Static PV and PVC for Vault (Force Binding to Existing Data)
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      - apiVersion: v1
+        kind: PersistentVolume
+        metadata:
+          name: vault-pv-static
+        spec:
+          capacity:
+            storage: 10Gi
+          accessModes: [ReadWriteOnce]
+          persistentVolumeReclaimPolicy: Retain
+          storageClassName: truenas-nfs
+          mountOptions:
+            - nfsvers=4.1
+            - hard
+            - nolock
+          nfs:
+            server: "{{ nfs_server_ip }}"
+            path: "{{ nfs_base_path }}/vault"
+
+      - apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          name: data-vault-0
+          namespace: vault
+        spec:
+          storageClassName: truenas-nfs
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              storage: 10Gi
+          volumeName: vault-pv-static
+
+- name: Add HashiCorp Helm repository
+  kubernetes.core.helm_repository:
+    name: hashicorp
+    repo_url: "https://helm.releases.hashicorp.com"
+
+- name: Install HashiCorp Vault (Connected to Existing Data)
+  kubernetes.core.helm:
+    name: vault
+    chart_ref: hashicorp/vault
+    release_namespace: vault
+    wait: true
+    values:
+      global:
+        enabled: true
+        namespace: vault
+      server:
+        statefulSet:
+          securityContext:
+            pod:
+              runAsUser: 9058
+              runAsGroup: 9058
+              fsGroup: 9058
+            container:
+              runAsUser: 9058
+              runAsGroup: 9058
+        ha:
+          enabled: false
+        dataStorage:
+          enabled: true
+          size: 10Gi
+          storageClass: ""
+          mountPath: "/vault/data"
+        standalone:
+          enabled: true
+          config: |
+            ui = true
+            listener "tcp" {
+              tls_disable = 1
+              address = "[::]:8200"
+              cluster_address = "[::]:8201"
+            }
+            storage "raft" {
+              path = "/vault/data"
+            }
+        ingress:
+          enabled: true
+          ingressClassName: "traefik"
+          hosts:
+            - host: "vault.foobarbaz.fr"
+          tls:
+            - secretName: vault-tls-cert
+              hosts:
+                - "vault.foobarbaz.fr"
+          annotations:
+            cert-manager.io/cluster-issuer: "letsencrypt-prod"
+            traefik.ingress.kubernetes.io/router.entrypoints: websecure
+      injector:
+        securityContext:
+          pod:
+            runAsUser: 9058
+            runAsGroup: 9058
+            fsGroup: 9058
+          container:
+            runAsUser: 9058
+            runAsGroup: 9058
+      ui:
+        enabled: true
+
+- name: Wait for Vault Pod to be Running
+  kubernetes.core.k8s_info:
+    kind: Pod
+    name: vault-0
+    namespace: vault
+  register: vault_pod
+  until:
+    - vault_pod.resources is defined
+    - vault_pod.resources | length > 0
+    - vault_pod.resources[0].status.phase == "Running"
+  retries: 30
+  delay: 10

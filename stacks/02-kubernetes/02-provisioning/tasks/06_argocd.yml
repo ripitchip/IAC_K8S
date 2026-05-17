@@ -1,0 +1,45 @@
+- name: Ensure ArgoCD namespace exists
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Namespace
+    name: argocd
+    state: present
+
+- name: Create ArgoCD Secret from Vault
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: argocd-secret
+        namespace: argocd
+        labels:
+          app.kubernetes.io/managed-by: "Helm"
+        annotations:
+          meta.helm.sh/release-name: "argocd"
+          meta.helm.sh/release-namespace: "argocd"
+      type: Opaque
+      stringData:
+        oidc.keycloak.clientSecret: "{{ argocd_oidc_secret }}"
+        server.secretkey: "{{ argocd_server_secret_key }}"
+
+- name: Install ArgoCD via Helm
+  kubernetes.core.helm:
+    name: argocd
+    chart_repo_url: https://argoproj.github.io/argo-helm
+    chart_ref: argo-cd
+    release_namespace: argocd
+    create_namespace: true
+    values:
+      "{{ lookup('ansible.builtin.template', playbook_dir + '/manifests/argocd-values.yaml') | from_yaml | combine({
+        'global': {
+          'securityContext': { 'runAsUser': 7746, 'runAsGroup': 7746, 'fsGroup': 7746 }
+        },
+        'redis': {
+          'securityContext': { 'runAsUser': 7746, 'runAsGroup': 7746, 'fsGroup': 7746 }
+        },
+        'dex': {
+          'containerSecurityContext': { 'runAsUser': 7746, 'runAsGroup': 7746 }
+        }
+      }, recursive=True) }}"

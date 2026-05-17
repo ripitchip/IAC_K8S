@@ -1,9 +1,59 @@
 ---
-- name: Initialize the first Master node (k8s-master-01)
+- name: Generate encryption key for secrets at rest
+  ansible.builtin.shell: head -c 32 /dev/urandom | base64
+  register: encryption_key
+  when: inventory_hostname == "k8s-master-01"
+
+- name: Create EncryptionConfiguration file
+  ansible.builtin.copy:
+    dest: /etc/kubernetes/encryption-config.yaml
+    content: |
+      apiVersion: apiserver.config.k8s.io/v1
+      kind: EncryptionConfiguration
+      resources:
+        - resources:
+            - secrets
+          providers:
+            - aescbc:
+                keys:
+                  - name: key1
+                    secret: {{ encryption_key.stdout }}
+            - identity: {}
+    mode: '0600'
+  when: inventory_hostname == "k8s-master-01"
+
+- name: Create kubeadm-config.yaml
+  ansible.builtin.copy:
+    dest: /tmp/kubeadm-config.yaml
+    content: |
+      apiVersion: kubeadm.k8s.io/v1beta3
+      kind: ClusterConfiguration
+      kubernetesVersion: stable
+      networking:
+        podSubnet: "10.244.0.0/16"
+      apiServer:
+        extraArgs:
+          encryption-provider-config: "/etc/kubernetes/encryption-config.yaml"
+          tls-cipher-suites: "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256"
+          profiling: "false"
+        extraVolumes:
+          - name: encryption-config
+            hostPath: "/etc/kubernetes/encryption-config.yaml"
+            mountPath: "/etc/kubernetes/encryption-config.yaml"
+            readOnly: true
+            pathType: File
+      controllerManager:
+        extraArgs:
+          profiling: "false"
+      scheduler:
+        extraArgs:
+          profiling: "false"
+    mode: '0644'
+  when: inventory_hostname == "k8s-master-01"
+
+- name: Initialize the first Master node with Hardening
   ansible.builtin.command: >-
-    kubeadm init
-    --pod-network-cidr=10.244.0.0/16
-    --apiserver-advertise-address={{ ansible_host }}
+    kubeadm init --config /tmp/kubeadm-config.yaml
     --node-name {{ inventory_hostname }}
   register: kubeadminit
   when: inventory_hostname == "k8s-master-01"
@@ -44,8 +94,3 @@
   ansible.builtin.set_fact:
     join_command: "{{ join_command_raw.stdout }}"
   when: inventory_hostname == "k8s-master-01"
-
-- name: Restart kubelet
-  ansible.builtin.systemd:
-    name: kubelet
-    state: restarted

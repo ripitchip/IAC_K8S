@@ -1,0 +1,67 @@
+---
+- name: Add Cilium Helm repo
+  kubernetes.core.helm_repository:
+    name: cilium
+    repo_url: "https://helm.cilium.io/"
+
+- name: Install Cilium CNI (Hardened Network)
+  kubernetes.core.helm:
+    name: cilium
+    chart_ref: cilium/cilium
+    release_namespace: kube-system
+    values:
+      ipam:
+        operator:
+          clusterPoolIPv4PodCIDRList: ["10.244.0.0/16"]
+      hubble:
+        enabled: true
+        relay:
+          enabled: true
+        ui:
+          enabled: true
+
+- name: Install NFS Provisioner
+  kubernetes.core.helm:
+    name: nfs-provisioner
+    chart_ref: nfs-subdir-external-provisioner/nfs-subdir-external-provisioner
+    release_namespace: kube-system
+    values:
+      nfs: 
+        server: "{{ nfs_server_ip }}"
+        path: "{{ nfs_base_path }}"
+      storageClass: 
+        name: truenas-nfs
+        defaultClass: true
+
+- name: Install MetalLB via Kubectl
+  ansible.builtin.shell:
+    cmd: kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.15.3/config/manifests/metallb-native.yaml
+  changed_when: true
+
+- name: Wait for MetalLB Controller
+  kubernetes.core.k8s_info:
+    kind: Deployment
+    name: controller
+    namespace: metallb-system
+  register: metallb_status
+  until: metallb_status.resources | length > 0 and (metallb_status.resources[0].status.readyReplicas | default(0)) > 0
+  retries: 15
+  delay: 5
+
+- name: Configure MetalLB IP Pool
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      - apiVersion: metallb.io/v1beta1
+        kind: IPAddressPool
+        metadata:
+          name: default-pool
+          namespace: metallb-system
+        spec:
+          addresses:
+            - "{{ metallb_ip_range }}"
+      - apiVersion: metallb.io/v1beta1
+        kind: L2Advertisement
+        metadata:
+          name: default-advertisement
+          namespace: metallb-system

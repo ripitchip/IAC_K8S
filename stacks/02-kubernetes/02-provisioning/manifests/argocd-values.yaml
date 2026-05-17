@@ -1,0 +1,88 @@
+# Configuration globale
+global:
+  domain: argocd.{{ root_domain }}
+  image:
+    tag: "v3.3.9" # On fige la version utilisée précédemment
+  
+  # --- AJOUT SÉCURITÉ ROOTLESS GLOBALE ---
+  securityContext:
+    runAsUser: 7746
+    runAsGroup: 7746
+    fsGroup: 7746
+
+# Configuration de l'authentification et des paramètres ArgoCD
+configs:
+  cm:
+    create: true
+    url: https://argocd.{{ root_domain }}
+    oidc.config: |
+      name: Keycloak
+      issuer: https://auth.{{ root_domain }}/realms/master
+      clientID: argocd
+      clientSecret: $argocd-secret:oidc.keycloak.clientSecret
+      requestedScopes: ["openid", "profile", "email", "groups"]
+  
+  rbac:
+    create: true
+    policy.default: role:readonly
+    policy.csv: |
+      g, argocd-admin, role:admin
+
+# Configuration du serveur ArgoCD et de son Ingress
+server:
+  extraArgs:
+    - --insecure
+  
+  ingress:
+    enabled: false
+  
+  resources:
+    limits: { cpu: 500m, memory: 512Mi }
+    requests: { cpu: 125m, memory: 256Mi }
+
+# Ressources pour le contrôleur d'application
+controller:
+  resources:
+    limits: { cpu: 1000m, memory: 1024Mi }
+    requests: { cpu: 250m, memory: 512Mi }
+
+# Ressources pour le serveur de dépôts (Repo Server)
+repoServer:
+  resources:
+    limits: { cpu: 500m, memory: 512Mi }
+    requests: { cpu: 125m, memory: 256Mi }
+  # On n'oublie pas l'initContainer utilisé par Argo pour copier ses binaires
+  copyutil:
+    resources:
+      limits: { cpu: 100m, memory: 128Mi }
+      requests: { cpu: 50m, memory: 64Mi }
+
+# Ressources pour Redis
+redis:
+  resources:
+    limits: { cpu: 200m, memory: 256Mi }
+    requests: { cpu: 50m, memory: 128Mi }
+
+# Ressources pour l'ApplicationSet controller
+applicationSet:
+  resources:
+    limits: { cpu: 500m, memory: 512Mi }
+    requests: { cpu: 125m, memory: 256Mi }
+
+# Ressources pour le Notifications controller
+notifications:
+  resources:
+    limits: { cpu: 200m, memory: 256Mi }
+    requests: { cpu: 50m, memory: 128Mi }
+
+# Ressources pour Dex
+dex:
+  resources:
+    limits: { cpu: 200m, memory: 256Mi }
+    requests: { cpu: 50m, memory: 128Mi }
+
+# On s'assure que le job d'init des secrets Redis respecte aussi les quotas
+redisSecretInit:
+  resources:
+    limits: { cpu: 100m, memory: 128Mi }
+    requests: { cpu: 50m, memory: 64Mi }
