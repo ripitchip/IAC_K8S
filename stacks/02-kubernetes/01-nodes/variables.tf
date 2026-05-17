@@ -5,10 +5,7 @@ variable "proxmox_api_secret" {
     sensitive = true
 }
 variable "ssh_public_key" { type = string }
-variable "vault_token" {
-    type = string
-    sensitive = true
-}
+
 
 variable "k8s_network" {
   type = object({ gateway = string, vlan = number, dns = string })

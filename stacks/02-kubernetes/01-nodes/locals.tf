@@ -44,8 +44,8 @@ runcmd:
   - apt-get install -y ca-certificates openssl --reinstall
   - update-ca-certificates
 
-  # 4. INSTALLATION NFS-COMMON, TOOLS & CONTAINERD
-  - apt-get install -y nfs-common curl gpg gnupg2 jq containerd
+  # 4. INSTALLATION TOOLS, PYTHON & CONTAINERD
+  - apt-get install -y nfs-common curl gpg gnupg2 jq containerd python3-pip
 
   # 5. CONFIGURATION DES DÉPÔTS (Bypass SSL via -k)
   - mkdir -p /etc/apt/keyrings
@@ -54,15 +54,16 @@ runcmd:
   - curl -fsSLk https://packages.buildkite.com/helm-linux/helm-debian/gpgkey | gpg --dearmor --yes -o /usr/share/keyrings/helm.gpg
   - echo "deb [signed-by=/usr/share/keyrings/helm.gpg] https://packages.buildkite.com/helm-linux/helm-debian/any/ any main" > /etc/apt/sources.list.d/helm-stable-debian.list
 
-  # 6. INSTALLATION KUBERNETES, HELM & CNI
+  # 6. INSTALLATION KUBERNETES, HELM & LIBS PYTHON (Fix urllib3 compat)
   - apt-get update -o "Acquire::https::Verify-Peer=false"
   - apt-get install -y -o "Acquire::https::Verify-Peer=false" kubelet kubeadm kubectl helm kubernetes-cni
-  - apt-mark hold kubelet kubeadm kubectl
+  - apt-mark hold kubelet kubeadm kubectl kustomize
+  # On force urllib3 < 2.0 avec --ignore-installed pour écraser la version APT qui cause l'erreur 'cert_file'
+  - pip3 install --break-system-packages --ignore-installed 'urllib3<2.00' kubernetes hvac
 
   # 7. CONFIGURATION CONTAINERD (Standard K8S + SystemdCgroup)
   - mkdir -p /etc/containerd
   - containerd config default > /etc/containerd/config.toml
-  # On force containerd à utiliser /opt/cni/bin (le standard K8S) au lieu du chemin Debian
   - sed -i 's|bin_dir = "/usr/lib/cni"|bin_dir = "/opt/cni/bin"|' /etc/containerd/config.toml
   - sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
   - systemctl restart containerd
