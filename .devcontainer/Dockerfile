@@ -34,6 +34,16 @@ RUN curl -fsSL -o /tmp/vault.zip \
     && rm -f /tmp/vault.zip \
     && chmod +x /usr/local/bin/vault
 
-# 4. Préparation du dossier SSH pour l'utilisateur vscode
+# 4. Installation de kubectl
+RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" \
+    && install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl \
+    && rm -f kubectl
+
+# 5. Installation de kustomize
+RUN curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash \
+    && mv kustomize /usr/local/bin/ \
+    && chmod +x /usr/local/bin/kustomize
+
+# 6. Préparation du dossier SSH pour l'utilisateur vscode
 RUN mkdir -p /home/vscode/.ssh && chown vscode:vscode /home/vscode/.ssh \
     && chmod 700 /home/vscode/.ssh
