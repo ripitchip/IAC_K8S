@@ -1,14 +1,14 @@
 resource "local_file" "ansible_inventory" {
-  content = <<EOT
+  content  = <<EOT
 [masters]
-%{ for name, conf in var.k8s_masters ~}
+%{for name, conf in var.k8s_masters~}
 ${name} ansible_host=${conf.ip} ansible_user=root
-%{ endfor ~}
+%{endfor~}
 
 [workers]
-%{ for name, conf in var.k8s_workers ~}
+%{for name, conf in var.k8s_workers~}
 ${name} ansible_host=${conf.ip} ansible_user=root
-%{ endfor ~}
+%{endfor~}
 
 [k8s:children]
 masters

@@ -8,10 +8,10 @@
     create_namespace: true
     # wait: true est crucial pour s'assurer que le service LoadBalancer reçoit son IP
     wait: true
-    values: 
-      service: 
+    values:
+      service:
         type: LoadBalancer
-      deployment: 
+      deployment:
         podSecurityContext: { fsGroup: 65532 }
       ingressClass:
         enabled: true
@@ -29,12 +29,12 @@
   kubernetes.core.helm:
     name: cert-manager
     chart_ref: oci://quay.io/jetstack/charts/cert-manager
-    chart_version: v1.16.2 
+    chart_version: v1.16.2
     release_namespace: cert-manager
     create_namespace: true
     wait: true
-    values: 
-      installCRDs: true 
+    values:
+      installCRDs: true
 
 - name: Wait for Cert-Manager Webhook to be ready
   kubernetes.core.k8s_info:
@@ -42,9 +42,9 @@
     name: cert-manager-webhook
     namespace: cert-manager
   register: cm_webhook
-  until: 
+  until:
     - cm_webhook.resources is defined
-    - cm_webhook.resources | length > 0 
+    - cm_webhook.resources | length > 0
     - (cm_webhook.resources[0].status.readyReplicas | default(0)) > 0
   retries: 20
   delay: 10
@@ -61,7 +61,7 @@
           name: letsencrypt-staging
         spec:
           acme:
-            email: "admin@{{ keycloak_domain }}"
+            email: "admin@{{ root_domain }}"
             server: https://acme-staging-v02.api.letsencrypt.org/directory
             privateKeySecretRef:
               name: letsencrypt-staging-account-key
@@ -82,7 +82,7 @@
           name: letsencrypt-staging
         spec:
           acme:
-            email: "admin@{{ keycloak_domain }}"
+            email: "admin@{{ root_domain }}"
             server: https://acme-staging-v02.api.letsencrypt.org/directory
             privateKeySecretRef:
               name: letsencrypt-staging-account-key
@@ -98,7 +98,7 @@
           name: letsencrypt-prod
         spec:
           acme:
-            email: "admin@{{ keycloak_domain }}"
+            email: "admin@{{ root_domain }}"
             server: https://acme-v02.api.letsencrypt.org/directory
             privateKeySecretRef:
               name: letsencrypt-prod-account-key

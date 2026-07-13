@@ -15,7 +15,11 @@ provider "proxmox" {
   ssh {
     agent       = false
     username    = "root"
-    private_key = file("/home/vscode/.ssh/id_rsa")
+    private_key = file(
+      fileexists("/home/vscode/.ssh/id_rsa") ? "/home/vscode/.ssh/id_rsa" :
+      fileexists("${path.module}/../../../local-secrets/id_rsa_proxmox") ? "${path.module}/../../../local-secrets/id_rsa_proxmox" :
+      pathexpand("~/.ssh/id_rsa")
+    )
     node {
       name    = "node1"
       address = "10.0.10.10"

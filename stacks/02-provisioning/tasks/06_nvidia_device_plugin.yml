@@ -1,0 +1,39 @@
+---
+- name: Label GPU worker node
+  ansible.builtin.command:
+    cmd: kubectl label node k8s-worker-00 nvidia.com/gpu.present=true --overwrite
+  register: gpu_node_label
+  changed_when: "'not labeled' not in gpu_node_label.stdout"
+
+- name: Deploy NVIDIA device plugin
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ nvidia_device_plugin_manifest }}"
+  vars:
+    nvidia_device_plugin_manifest: >-
+      {{
+        lookup(
+          'ansible.builtin.file',
+          playbook_dir + '/tasks/manifests/nvidia-device-plugin.yml'
+        ) | from_yaml
+      }}
+
+- name: Wait for NVIDIA device plugin rollout
+  ansible.builtin.command:
+    cmd: kubectl -n kube-system rollout status daemonset/nvidia-device-plugin-daemonset --timeout=180s
+  changed_when: false
+
+- name: Wait for GPU capacity to be published
+  ansible.builtin.command:
+    cmd: kubectl get node k8s-worker-00 -o jsonpath='{.status.capacity.nvidia\.com/gpu}'
+  register: gpu_capacity
+  until: gpu_capacity.stdout | int > 0
+  retries: 20
+  delay: 6
+  changed_when: false
+
+- name: Ensure GPU worker is schedulable
+  ansible.builtin.command:
+    cmd: kubectl uncordon k8s-worker-00
+  register: gpu_worker_uncordon
+  changed_when: "'uncordoned' in gpu_worker_uncordon.stdout"

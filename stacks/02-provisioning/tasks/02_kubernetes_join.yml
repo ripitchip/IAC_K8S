@@ -1,6 +1,6 @@
 ---
 - name: Execute join command on nodes
-  ansible.builtin.command: "{{ hostvars['k8s-master-01'].join_command }}"
+  ansible.builtin.command: "{{ hostvars['k8s-master-00'].join_command }}"
   args:
     creates: /etc/kubernetes/kubelet.conf
   register: join_out
@@ -10,14 +10,14 @@
 
 - name: Label nodes as workers
   ansible.builtin.command: "kubectl label node {{ inventory_hostname }} node-role.kubernetes.io/worker=worker --overwrite"
-  delegate_to: k8s-master-01
+  delegate_to: k8s-master-00
   when: "'workers' in group_names"
   failed_when: false
 
 - name: Label secondary masters
   ansible.builtin.command: "kubectl label node {{ inventory_hostname }} node-role.kubernetes.io/control-plane= --overwrite"
-  delegate_to: k8s-master-01
-  when: "inventory_hostname in ['k8s-master-02', 'k8s-master-03']"
+  delegate_to: k8s-master-00
+  when: "inventory_hostname in ['k8s-master-01', 'k8s-master-02']"
   failed_when: false
 
 - name: Restart kubelet

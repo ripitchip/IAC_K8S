@@ -1,7 +1,0 @@
-nfs_server_ip: "10.0.60.10"
-nfs_base_path: "/mnt/data/k8s-cluster/pvc-volumes"
-metallb_ip_range: "10.0.50.200-10.0.50.250"
-keycloak_domain: "auth.foobarbaz.fr"
-lldap_domain: "ldap.foobarbaz.fr"
-vw_domain: "pass.foobarbaz.fr"
-root_domain: "foobarbaz.fr"

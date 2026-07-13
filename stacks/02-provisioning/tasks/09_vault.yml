@@ -64,15 +64,24 @@
         enabled: true
         namespace: vault
       server:
+        resources:
+          requests:
+            memory: 256Mi
+            cpu: 250m
+          limits:
+            memory: 256Mi
+            cpu: 250m
         statefulSet:
           securityContext:
             pod:
               runAsUser: 9058
               runAsGroup: 9058
               fsGroup: 9058
+              runAsNonRoot: true
             container:
               runAsUser: 9058
               runAsGroup: 9058
+              runAsNonRoot: true
         ha:
           enabled: false
         dataStorage:
@@ -105,14 +114,23 @@
             cert-manager.io/cluster-issuer: "letsencrypt-prod"
             traefik.ingress.kubernetes.io/router.entrypoints: websecure
       injector:
+        resources:
+          requests:
+            memory: 256Mi
+            cpu: 250m
+          limits:
+            memory: 256Mi
+            cpu: 250m
         securityContext:
           pod:
             runAsUser: 9058
             runAsGroup: 9058
             fsGroup: 9058
+            runAsNonRoot: true
           container:
             runAsUser: 9058
             runAsGroup: 9058
+            runAsNonRoot: true
       ui:
         enabled: true
 

@@ -1,0 +1,79 @@
+---
+- name: Ensure base Python tools and NFS client are installed
+  ansible.builtin.apt:
+    name: [python3-pip, python3-setuptools, python3-full, nfs-common]
+    state: present
+    update_cache: yes
+  become: true
+
+- name: Fix Python environment for K8s modules
+  ansible.builtin.pip:
+    name: ["urllib3<2", "kubernetes>=24.2.0", "PyYAML>=5.4.1"]
+    state: present
+    extra_args: "--break-system-packages"
+  become: true
+
+- name: Create NFS subdirectories for static PVs
+  block:
+    - name: Create temporary mount point
+      ansible.builtin.file:
+        path: /tmp/nfs-bootstrap-mount
+        state: directory
+        mode: '0755'
+
+    - name: Mount NFS base share
+      ansible.builtin.shell: |
+        mountpoint -q /tmp/nfs-bootstrap-mount || mount -t nfs -o nfsvers=4.1,hard,nolock "{{ nfs_server_ip }}:{{ nfs_base_path }}" /tmp/nfs-bootstrap-mount
+      changed_when: false
+
+    - name: Ensure subdirectories exist with correct permissions
+      ansible.builtin.file:
+        path: "/tmp/nfs-bootstrap-mount/{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner | default(omit) }}"
+        group: "{{ item.group | default(omit) }}"
+        mode: "{{ item.mode | default('0755') }}"
+      loop:
+        - { path: 'vault', owner: '9058', group: '9058', mode: '0700' }
+
+  always:
+    - name: Unmount NFS base share
+      ansible.builtin.shell: |
+        if mountpoint -q /tmp/nfs-bootstrap-mount; then
+          umount -f /tmp/nfs-bootstrap-mount
+        fi
+      changed_when: false
+
+    - name: Clean up temporary mount directory
+      ansible.builtin.file:
+        path: /tmp/nfs-bootstrap-mount
+        state: absent
+  when: inventory_hostname == "k8s-master-00"
+
+- name: Ensure admin.conf exists
+  ansible.builtin.stat:
+    path: /etc/kubernetes/admin.conf
+  register: admin_conf
+
+- name: Fail if Kubernetes is not initialized
+  ansible.builtin.fail:
+    msg: "Kubernetes configuration not found at /etc/kubernetes/admin.conf. Please ensure the cluster is initialized (uncomment Phase 1 in site.yml if needed)."
+  when: not admin_conf.stat.exists
+
+- name: Ensure Namespaces exist
+  kubernetes.core.k8s:
+    name: "{{ item }}"
+    api_version: v1
+    kind: Namespace
+    state: present
+  loop: [kube-flannel, traefik, vault, argocd, metallb-system, cert-manager]
+
+- name: Add Helm Repositories
+  kubernetes.core.helm_repository:
+    name: "{{ item.name }}"
+    repo_url: "{{ item.url }}"
+  loop:
+    - { name: 'flannel', url: 'https://flannel-io.github.io/flannel/' }
+    - { name: 'nfs-subdir-external-provisioner', url: 'https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner/' }
+    - { name: 'argo', url: 'https://argoproj.github.io/argo-helm' }
+    - { name: 'hashicorp', url: 'https://helm.releases.hashicorp.com' }

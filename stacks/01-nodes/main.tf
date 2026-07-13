@@ -21,12 +21,28 @@ resource "proxmox_virtual_environment_file" "k8s_snippets" {
   }
 }
 
+resource "proxmox_virtual_environment_hardware_mapping_pci" "gpu" {
+  name    = "gpu"
+  comment = "NVIDIA RTX 2000 Ada passthrough on node1"
+
+  map = [
+    {
+      id           = "10de:28b0"
+      iommu_group  = 15
+      node         = "node1"
+      path         = "0000:01:00.0"
+      subsystem_id = "1028:1870"
+    },
+  ]
+}
+
 # 3. Déploiement des VMs (Masters + Workers)
 resource "proxmox_virtual_environment_vm" "k8s_vms" {
   for_each  = local.all_k8s_vms
   name      = each.key
   node_name = each.value.node
   vm_id     = each.value.vm_id
+  machine   = try(each.value.gpu, false) ? "q35" : null
   tags      = length(regexall("master", each.key)) > 0 ? ["k8s", "master"] : ["k8s", "worker"]
 
   scsi_hardware = "virtio-scsi-pci"
@@ -38,7 +54,7 @@ resource "proxmox_virtual_environment_vm" "k8s_vms" {
   }
   cpu {
     cores = each.value.cpu
-    type = "host"
+    type  = "host"
   }
   memory { dedicated = each.value.ram }
 
@@ -55,6 +71,15 @@ resource "proxmox_virtual_environment_vm" "k8s_vms" {
     file_format  = "raw"
     iothread     = true
     discard      = "on"
+  }
+
+  dynamic "hostpci" {
+    for_each = try(each.value.gpu, false) ? [1] : []
+    content {
+      device  = "hostpci0"
+      mapping = proxmox_virtual_environment_hardware_mapping_pci.gpu.name
+      pcie    = true
+    }
   }
 
   initialization {

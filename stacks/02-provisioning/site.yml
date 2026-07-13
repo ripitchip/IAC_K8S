@@ -1,0 +1,45 @@
+---
+- name: 1. Initialize Control Plane (Master 00)
+  hosts: k8s-master-00
+  become: true
+  tasks:
+    - name: Bootstrap Kubernetes Cluster
+      ansible.builtin.import_tasks: tasks/01_kubernetes_init.yml
+
+- name: 2. Join Nodes (Workers and Secondary Masters)
+  hosts: workers, k8s-master-01, k8s-master-02
+  become: true
+  tasks:
+    - name: Join cluster and set roles
+      ansible.builtin.import_tasks: tasks/02_kubernetes_join.yml
+
+- name: 3. Configure GPU Worker
+  hosts: k8s-worker-00
+  become: true
+  tasks:
+    - name: Install NVIDIA driver and container runtime
+      ansible.builtin.import_tasks: tasks/03_gpu_worker.yml
+
+- name: 4. Deploy Cluster Services
+  hosts: k8s-master-00
+  become: true
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  tasks:
+    - name: "Phase 4: Pre-requisites & Namespaces"
+      ansible.builtin.include_tasks: tasks/04_preparation.yml
+
+    - name: "Phase 5: Network (Cilium) & Storage (NFS/MetalLB)"
+      ansible.builtin.include_tasks: tasks/05_network_storage.yml
+
+    - name: "Phase 6: NVIDIA Device Plugin"
+      ansible.builtin.include_tasks: tasks/06_nvidia_device_plugin.yml
+
+    - name: "Phase 7: Ingress (Traefik)"
+      ansible.builtin.include_tasks: tasks/07_ingress.yml
+
+    - name: "Phase 8: GitOps (ArgoCD)"
+      ansible.builtin.include_tasks: tasks/08_argocd.yml
+
+    - name: "Phase 9: Vault (HashiCorp)"
+      ansible.builtin.include_tasks: tasks/09_vault.yml

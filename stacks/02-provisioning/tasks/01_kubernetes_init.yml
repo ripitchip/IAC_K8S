@@ -2,7 +2,14 @@
 - name: Generate encryption key for secrets at rest
   ansible.builtin.shell: head -c 32 /dev/urandom | base64
   register: encryption_key
-  when: inventory_hostname == "k8s-master-01"
+  when: inventory_hostname == "k8s-master-00"
+
+- name: Ensure /etc/kubernetes directory exists
+  ansible.builtin.file:
+    path: /etc/kubernetes
+    state: directory
+    mode: '0755'
+  when: inventory_hostname == "k8s-master-00"
 
 - name: Create EncryptionConfiguration file
   ansible.builtin.copy:
@@ -20,7 +27,7 @@
                     secret: {{ encryption_key.stdout }}
             - identity: {}
     mode: '0600'
-  when: inventory_hostname == "k8s-master-01"
+  when: inventory_hostname == "k8s-master-00"
 
 - name: Create kubeadm-config.yaml
   ansible.builtin.copy:
@@ -34,7 +41,12 @@
       apiServer:
         extraArgs:
           encryption-provider-config: "/etc/kubernetes/encryption-config.yaml"
-          tls-cipher-suites: "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256"
+          tls-cipher-suites: >-
+            TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+            TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+            TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+            TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+            TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
           profiling: "false"
         extraVolumes:
           - name: encryption-config
@@ -49,19 +61,19 @@
         extraArgs:
           profiling: "false"
     mode: '0644'
-  when: inventory_hostname == "k8s-master-01"
+  when: inventory_hostname == "k8s-master-00"
 
 - name: Initialize the first Master node with Hardening
   ansible.builtin.command: >-
     kubeadm init --config /tmp/kubeadm-config.yaml
     --node-name {{ inventory_hostname }}
   register: kubeadminit
-  when: inventory_hostname == "k8s-master-01"
+  when: inventory_hostname == "k8s-master-00"
   args:
     creates: /etc/kubernetes/admin.conf
 
 - name: Configure kubectl for the primary master
-  when: inventory_hostname == "k8s-master-01"
+  when: inventory_hostname == "k8s-master-00"
   block:
     - name: Create the .kube directory
       ansible.builtin.file:
@@ -87,10 +99,10 @@
 - name: Generate the join command on the primary master
   ansible.builtin.command: kubeadm token create --print-join-command
   register: join_command_raw
-  when: inventory_hostname == "k8s-master-01"
+  when: inventory_hostname == "k8s-master-00"
   changed_when: false
 
 - name: Set join command as a global fact
   ansible.builtin.set_fact:
     join_command: "{{ join_command_raw.stdout }}"
-  when: inventory_hostname == "k8s-master-01"
+  when: inventory_hostname == "k8s-master-00"
